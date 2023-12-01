@@ -1,2 +1,2 @@
 # experimental
-This is the repository that houses all experiments and practices that I do to integrate into various coding projects and improve my skills in computer science. Sometimes, building something into a developing project may introduce additional difficulties to see if a particular algorithm or method is fully functional. Therefore, experimenting with the ideas in a smaller environment can be worthwhile. 
+Repository for testing, experiments, proof of concepts, and studies into areas such as reverse engineering, machine learning, algorithms, systems, concurrency, etc. 
