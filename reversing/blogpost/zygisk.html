@@ -1,0 +1,425 @@
+<h1 id="zygisk-源码分析">Zygisk 源码分析</h1>
+<p>以下分析基于 Magisk <a href="https://github.com/topjohnwu/Magisk/tree/76ddfeb93a8b3612cd68988323f422e996751e16">76ddfeb93a8b3612cd68988323f422e996751e16</a></p>
+<p><strong>由于 Magisk 更新太快了，决定弃坑，自己去看源码罢！</strong></p>
+<h1 id="zygisk-注入到-zygote-进程">Zygisk 注入到 Zygote 进程</h1>
+<p>Zygisk 加载是通过替换 app_process ，修改 LD_PRELOAD ，再执行原 app_process 实现的。</p>
+<p><strong>magic mount 挂载 app_process</strong></p>
+<p>Magisk 处理模块和 magisk 内部目录(MAGISKTMP)的挂载的过程，也就是众所周知的 magic mount ，原理是挂载 tmpfs 作为目录，并 bind mount 原有的和修改后的文件，而 zygisk 也在这里处理。</p>
+<p>magic_mount 的过程在 magiskd 守护进程中完成。</p>
+<pre><code class="language-cpp">// native/jni/core/module.cpp
+void magic_mount() {
+    // ...
+    // Mount on top of modules to enable zygisk
+    if (zygisk_enabled) {
+        string zygisk_bin = MAGISKTMP + &quot;/&quot; ZYGISKBIN; // /sbin/.magisk/zygisk 或 /dev/xxx/.magisk/zygisk
+        mkdir(zygisk_bin.data(), 0);
+        mount_zygisk(32)
+        mount_zygisk(64)
+    }
+}
+
+// native/jni/core/module.cpp
+
+int app_process_32 = -1;
+int app_process_64 = -1;
+
+#define mount_zygisk(bit)                                                               \
+if (access(&quot;/system/bin/app_process&quot; #bit, F_OK) == 0) {                                \
+    app_process_##bit = xopen(&quot;/system/bin/app_process&quot; #bit, O_RDONLY | O_CLOEXEC);    \
+    string zbin = zygisk_bin + &quot;/app_process&quot; #bit;                                     \
+    string mbin = MAGISKTMP + &quot;/magisk&quot; #bit;                                           \
+    int src = xopen(mbin.data(), O_RDONLY | O_CLOEXEC);                                 \
+    int out = xopen(zbin.data(), O_CREAT | O_WRONLY | O_CLOEXEC, 0);                    \
+    xsendfile(out, src, nullptr, INT_MAX);                                              \
+    close(src);                                                                         \
+    close(out);                                                                         \
+    clone_attr(&quot;/system/bin/app_process&quot; #bit, zbin.data());                            \
+    bind_mount(zbin.data(), &quot;/system/bin/app_process&quot; #bit);                            \
+}
+</code></pre>
+<p>mount_zygisk 做了三件事：</p>
+<ol>
+<li>打开原先的 <code>app_process[32|64]</code> 文件，fd 保存到 <code>app_process_[32|64]</code> 中  </li>
+<li>把 magisk 自己的可执行文件 <code>magisk[32|64]</code> (mbin) 复制到 zygisk 目录下的 <code>app_process[32|64]</code> (zbin) ，此处用了 sendfile 直接在内核中复制文件。  </li>
+<li>把 zygisk 目录下假的 app_process (实际是 magisk) bind mount 到原先的 <code>/system/bin/app_process[32|64]</code></li>
+</ol>
+<p>这么一来，/system/bin 下的 app_process 就变成了 magisk ，而原先的 app_process 的 fd 被 magiskd 持有。执行 app_process 的时候就是执行了 magisk 。</p>
+<p>那么 magisk 又怎么代替 app_process 工作呢？接着看 magisk 的 main :</p>
+<p><strong>app_process_main</strong></p>
+<p>首先 magisk 可执行程序的入口 main 在 <code>native/jni/core/applets.cpp</code> 里面，app_process 实际上可以看作是它的一个 applet （类似 su, resetprop 这些，不过被隐藏了，因为这是个内部功能）。main 启动会判断自己的文件名 (argv0) ，如果是 app_process 就会调用 <code>app_process_main</code></p>
+<pre><code class="language-cpp">// native/jni/zygisk/main.cpp
+// Entrypoint for app_process overlay
+int app_process_main(int argc, char *argv[]) {
+    android_logging();
+    char buf[256];
+
+    bool zygote = false;
+    if (auto fp = open_file(&quot;/proc/self/attr/current&quot;, &quot;r&quot;)) {
+        fscanf(fp.get(), &quot;%s&quot;, buf);
+        zygote = (buf == &quot;u:r:zygote:s0&quot;sv);
+    }
+
+    if (!zygote) {
+        // ...
+    }
+
+    if (int socket = connect_daemon(); socket &gt;= 0) {
+        do {
+            write_int(socket, ZYGISK_REQUEST);
+            write_int(socket, ZYGISK_SETUP);
+
+            if (read_int(socket) != 0)
+                break;
+
+            int app_proc_fd = recv_fd(socket);
+            if (app_proc_fd &lt; 0)
+                break;
+
+            string tmp = read_string(socket);
+#if defined(__LP64__)
+            string lib = tmp + &quot;/&quot; ZYGISKBIN &quot;/zygisk.app_process64.1.so&quot;;
+#else
+            string lib = tmp + &quot;/&quot; ZYGISKBIN &quot;/zygisk.app_process32.1.so&quot;;
+#endif
+            if (char *ld = getenv(&quot;LD_PRELOAD&quot;)) {
+                char env[256];
+                sprintf(env, &quot;%s:%s&quot;, ld, lib.data());
+                setenv(&quot;LD_PRELOAD&quot;, env, 1);
+            } else {
+                setenv(&quot;LD_PRELOAD&quot;, lib.data(), 1);
+            }
+            setenv(INJECT_ENV_1, &quot;1&quot;, 1);
+            setenv(&quot;MAGISKTMP&quot;, tmp.data(), 1);
+
+            close(socket);
+
+            snprintf(buf, sizeof(buf), &quot;/proc/self/fd/%d&quot;, app_proc_fd);
+            fcntl(app_proc_fd, F_SETFD, FD_CLOEXEC);
+            execve(buf, argv, environ);
+        } while (false);
+
+        close(socket);
+    }
+
+    // If encountering any errors, unmount and execute the original app_process
+    xreadlink(&quot;/proc/self/exe&quot;, buf, sizeof(buf));
+    xumount2(&quot;/proc/self/exe&quot;, MNT_DETACH);
+    execve(buf, argv, environ);
+    return 1;
+}
+</code></pre>
+<p>这个「代理」要处理非 zygote 和 zygote 两种情况，我们主要关心 zygote 的。</p>
+<p>首先连接到 magiskd ，然后发送 <code>ZYGISK_SETUP</code> ，会得到一个 fd 和一个字符串。我们看看服务端怎么处理的：</p>
+<pre><code class="language-cpp">// native/jni/zygisk/entry.cpp
+void zygisk_handler(int client, const sock_cred *cred) {
+    int code = read_int(client);
+    char buf[256];
+    switch (code) {
+    case ZYGISK_SETUP:
+        setup_files(client, cred);
+        break;
+        // ...
+    }
+  // ...
+}
+
+static void setup_files(int client, const sock_cred *cred) {
+    LOGD(&quot;zygisk: setup files for pid=[%d]\n&quot;, cred-&gt;pid);
+
+    char buf[256]; // 请求者的可执行程序路径 (/proc/pid/exec) ，一般是 /system/bin/app_process[32|64]
+    if (!get_exe(cred-&gt;pid, buf, sizeof(buf))) {
+        write_int(client, 1);
+        return;
+    }
+
+    bool is_64_bit = str_ends(buf, &quot;64&quot;);
+
+    // ...
+
+    write_int(client, 0);
+    send_fd(client, is_64_bit ? app_process_64 : app_process_32); // 发送持有的真正的 app_process 文件 fd
+
+    string path = MAGISKTMP + &quot;/&quot; ZYGISKBIN &quot;/zygisk.&quot; + basename(buf);
+    cp_afc(buf, (path + &quot;.1.so&quot;).data()); // 复制 buf 路径的文件到 MAGISKTMP/zygisk/zygisk.app_process[32|64].1.so
+    cp_afc(buf, (path + &quot;.2.so&quot;).data());
+    write_string(client, MAGISKTMP); // 发送 MAGISKTMP 路径
+}
+</code></pre>
+<p>这里省略了一些代码。可见发送的就是原始的 app_process 的 fd ，这个 fd 可以用于 exec 。</p>
+<p>接着把 <code>MAGISKTMP/zygisk/zygisk.app_process[32|64].1.so</code> 写到了环境变量 LD_PRELOAD 里面，看来 magisk 本体注入到 app_process 里面就是通过它。</p>
+<p>绕了这么一大圈总算明白 zygisk 如何注入的了——不像 riru 用 zygote 的 native bridge ，或者是以前那样替换某个原生库，也不像 xposed 直接修改了 app_process ，而是另辟蹊径，「代理」它启动，用 LD_PRELOAD 注入进去，这种魔法般的做法确实符合「magisk」这个名字。实际上这也为我们提供了一个新的思路，如果要注入某个系统进程，可以考虑用这样的方法注入。</p>
+<blockquote>
+<p>P.S. 想了解 Riru 的注入方式( natice bridge ) 可以参考 canyie 的这篇：<a href="https://blog.canyie.top/2020/08/18/nbinjection/">通过系统的native bridge实现注入zygote - 残页的小博客</a></p>
+</blockquote>
+<blockquote>
+<p>P.S.2 实际上 Sui 有一个鲜为人知的功能「<a href="https://github.com/RikkaApps/Sui/commit/85d2ae13ca6ebfa5c0fee8ecf4c05da2b4d7cf9f">开启 adb root</a>」，似乎也是替换入口？</p>
+</blockquote>
+<h1 id="zygisk-的加载">Zygisk 的加载</h1>
+<p>入口在 <code>native/jni/zygisk/entry.cpp</code></p>
+<pre><code class="language-cpp">__attribute__((constructor))
+static void zygisk_init() {
+    if (getenv(INJECT_ENV_2)) {
+        // Return function pointer to first stage
+        char buf[128];
+        snprintf(buf, sizeof(buf), &quot;%p&quot;, &amp;second_stage_entry);
+        setenv(SECOND_STAGE_PTR, buf, 1);
+    } else if (getenv(INJECT_ENV_1)) {
+        first_stage_entry();
+    }
+}
+</code></pre>
+<p>具有 <code>constructor</code> attribute 的函数会在库加载的时候调用。</p>
+<p>可以发现 zygisk 加载似乎分为两个阶段，在代理启动 app_process 时，除了 LD_PRELOAD ，还注入了一个 env <code>INJECT_ENV_1</code> (<code>MAGISK_INJ_1</code>) ，现在看来，作用是进行「一阶段」的加载。</p>
+<h2 id="一阶段">一阶段</h2>
+<pre><code class="language-cpp">static void first_stage_entry() {
+    android_logging();
+    ZLOGD(&quot;inject 1st stage\n&quot;);
+
+    char *ld = getenv(&quot;LD_PRELOAD&quot;);
+    char tmp[128];
+    strlcpy(tmp, getenv(&quot;MAGISKTMP&quot;), sizeof(tmp));
+    char *path;
+    if (char *c = strrchr(ld, &#39;:&#39;)) {
+        *c = &#39;\0&#39;;
+        setenv(&quot;LD_PRELOAD&quot;, ld, 1);  // Restore original LD_PRELOAD
+        path = strdup(c + 1);
+    } else {
+        unsetenv(&quot;LD_PRELOAD&quot;);
+        path = strdup(ld);
+    }
+    unsetenv(INJECT_ENV_1);
+    unsetenv(&quot;MAGISKTMP&quot;);
+    sanitize_environ();
+
+    char *num = strrchr(path, &#39;.&#39;) - 1;
+
+    // Update path to 2nd stage lib
+    *num = &#39;2&#39;;
+
+    // Load second stage
+    setenv(INJECT_ENV_2, &quot;1&quot;, 1);
+    void *handle = dlopen(path, RTLD_LAZY);
+    remap_all(path);
+
+    // Revert path to 1st stage lib
+    *num = &#39;1&#39;;
+
+    // Run second stage entry
+    char *env = getenv(SECOND_STAGE_PTR);
+    decltype(&amp;second_stage_entry) second_stage;
+    sscanf(env, &quot;%p&quot;, &amp;second_stage);
+    second_stage(handle, tmp, path);
+}
+</code></pre>
+<p>粗略看一遍代码，一阶段的作用似乎只有一个：dlopen 加载二阶段。这和 riru 的加载有些类似：nativebridge 加载的 libriruloader.so 仅仅负责将 riru 本体加载进来，自己则会被 zygote 卸载。</p>
+<p>除此之外，一阶段还重置了 LD_PRELOAD 和 INJECT_ENV_1 ，并调用一个 <code>sanitize_environ</code> 函数：</p>
+<pre><code class="language-cpp">// Make sure /proc/self/environ is sanitized
+// Filter env and reset MM_ENV_END
+static void sanitize_environ() {
+    char *cur = environ[0];
+
+    for (int i = 0; environ[i]; ++i) {
+        // Copy all env onto the original stack
+        int len = strlen(environ[i]);
+        memmove(cur, environ[i], len + 1);
+        environ[i] = cur;
+        cur += len + 1;
+    }
+
+    prctl(PR_SET_MM, PR_SET_MM_ENV_END, cur, 0, 0);
+}
+</code></pre>
+<p>环境变量存储在进程的内存中，由指针数组 environ[] 保存每个环境变量的位置（0 终止）。环境变量的字符串都是连续放置的，形如 <code>NAME=value\0</code> 。</p>
+<p>这个函数看起来是要让环境变量对齐，避免检测到被删除的环境变量留下的空白（真的有利用这个特性检测的吗？）</p>
+<blockquote>
+<p>当然细节还得看一下 android C 库对环境变量的处理。</p>
+</blockquote>
+<p>清理完成 env 后又注入了 INJECT_ENV_2 ，此时加载的就是 <code>zygisk.app_process.[32|64].2.so</code> 了（实际上 <code>.1</code> 和 <code>.2</code> 复制的都是同一份，可能是为了防止同名而不重复加载？），用 dlopen 加载。</p>
+<p>加载完成后，调用了一个 remap_all ，传入的是它的 path 。看上去是把对应 path 的映射全都重新映射成匿名的，目的是为了从 maps 中隐藏自身（原理应该类似 riru hide）</p>
+<pre><code class="language-cpp">void remap_all(const char *name) {
+    vector&lt;map_info&gt; maps = find_maps(name);
+    for (map_info &amp;info : maps) { // 遍历 maps 中指定文件名的映射信息
+        void *addr = reinterpret_cast&lt;void *&gt;(info.start);
+        size_t size = info.end - info.start;
+        void *copy = xmmap(nullptr, size, PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0); // 映射和目标同样大小的可写内存
+        if ((info.perms &amp; PROT_READ) == 0) {
+            mprotect(addr, size, PROT_READ); // 如果目标不可读，让其可读
+        }
+        memcpy(copy, addr, size); // 复制目标的内存到新的映射
+        mremap(copy, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, addr); // 用新的映射覆盖到原先目标的位置
+        mprotect(addr, size, info.perms); // 恢复权限使其和目标一致
+    }
+}
+</code></pre>
+<p>load 二阶段同样会调用 constructor ，只不过这回走 INJECT_ENV_2 的分支，把 second_stage_entry 的地址放到了环境变量中，供一阶段调用。</p>
+<h2 id="二阶段">二阶段</h2>
+<pre><code class="language-cpp">static void second_stage_entry(void *handle, const char *tmp, char *path) {
+    self_handle = handle;
+    MAGISKTMP = tmp;
+    unsetenv(INJECT_ENV_2);
+    unsetenv(SECOND_STAGE_PTR);
+
+    zygisk_logging();
+    ZLOGD(&quot;inject 2nd stage\n&quot;);
+    hook_functions();
+
+    // First stage will be unloaded before the first fork
+    first_stage_path = path;
+}
+</code></pre>
+<p>进入二阶段后，zygisk 的 so 已经在 maps 中隐藏了。二阶段的入口接收了从一阶段传入的自身的 handle ，magisk tmp 目录和一阶段的 path 。</p>
+<blockquote>
+<p>二阶段也同样要恢复之前设置的环境变量，但这里并没有调用 <code>sanitize_environ</code> ，难道是不需要吗？</p>
+</blockquote>
+<p>二阶段的重头戏就是 <code>hook_functions</code> 了，这部分才是 zygisk 的核心。代码位于 <code>native/jni/zygisk/hook.cpp</code>。</p>
+<pre><code class="language-cpp">#define XHOOK_REGISTER_SYM(PATH_REGEX, SYM, NAME) \
+    hook_register(PATH_REGEX, SYM, (void*) new_##NAME, (void **) &amp;old_##NAME)
+
+#define XHOOK_REGISTER(PATH_REGEX, NAME) \
+    XHOOK_REGISTER_SYM(PATH_REGEX, #NAME, NAME)
+
+#define ANDROID_RUNTIME &quot;.*/libandroid_runtime.so$&quot;
+#define APP_PROCESS     &quot;^/system/bin/app_process.*&quot;
+
+void hook_functions() {
+#if MAGISK_DEBUG
+    // xhook_enable_debug(1);
+    xhook_enable_sigsegv_protection(0);
+#endif
+    default_new(xhook_list);
+    default_new(jni_hook_list);
+    default_new(jni_method_map);
+
+    XHOOK_REGISTER(ANDROID_RUNTIME, fork);
+    XHOOK_REGISTER(ANDROID_RUNTIME, unshare);
+    XHOOK_REGISTER(ANDROID_RUNTIME, jniRegisterNativeMethods);
+    XHOOK_REGISTER(ANDROID_RUNTIME, selinux_android_setcontext);
+    XHOOK_REGISTER_SYM(ANDROID_RUNTIME, &quot;__android_log_close&quot;, android_log_close);
+    hook_refresh();
+
+    // Remove unhooked methods
+    xhook_list-&gt;erase(
+            std::remove_if(xhook_list-&gt;begin(), xhook_list-&gt;end(),
+            [](auto &amp;t) { return *std::get&lt;2&gt;(t) == nullptr;}),
+            xhook_list-&gt;end());
+
+    if (old_jniRegisterNativeMethods == nullptr) {
+        ZLOGD(&quot;jniRegisterNativeMethods not hooked, using fallback\n&quot;);
+
+        // android::AndroidRuntime::setArgv0(const char*, bool)
+        XHOOK_REGISTER_SYM(APP_PROCESS, &quot;_ZN7android14AndroidRuntime8setArgv0EPKcb&quot;, setArgv0);
+        hook_refresh();
+
+        // We still need old_jniRegisterNativeMethods as other code uses it
+        // android::AndroidRuntime::registerNativeMethods(_JNIEnv*, const char*, const JNINativeMethod*, int)
+        constexpr char sig[] = &quot;_ZN7android14AndroidRuntime21registerNativeMethodsEP7_JNIEnvPKcPK15JNINativeMethodi&quot;;
+        *(void **) &amp;old_jniRegisterNativeMethods = dlsym(RTLD_DEFAULT, sig);
+    }
+}
+</code></pre>
+<p>我们知道，Zygisk 和 Riru 最大的不同在于它有一个「排除列表」，被排除的进程一定不会注入，而如果像 Riru 那样直接在 zygote 进程中加载所有模块显然是做不到的，一旦 Zygote 加载了模块，它想干什么就不是 Zygisk 能管的了。但是又要让模块有修改 forkAndSpecialize 参数的能力，而这个方法调用 fork 前是在 zygote 进程中执行的，因此好像必须在 zygote 中执行模块的代码。这么看来 Zygisk 一定用了一些巧妙的手段处理。</p>
+<p>注意到 Zygisk hook 了很多关键的函数，我们先看看 fork :</p>
+<pre><code class="language-cpp">// Skip actual fork and return cached result if applicable
+// Also unload first stage zygisk if necessary
+DCL_HOOK_FUNC(int, fork) {
+    unload_first_stage();
+    return (g_ctx &amp;&amp; g_ctx-&gt;pid &gt;= 0) ? g_ctx-&gt;pid : old_fork();
+}
+
+#define DCL_HOOK_FUNC(ret, func, ...) \
+ret (*old_##func)(__VA_ARGS__);       \
+ret new_##func(__VA_ARGS__)
+</code></pre>
+<p>此处 DCL_HOOK_FUNC 是用于声明 hook 函数和备份函数的，因此上面的代码等效于：</p>
+<pre><code class="language-cpp">int (*old_fork)();
+int new_fork() {
+    unload_first_stage();
+    return (g_ctx &amp;&amp; g_ctx-&gt;pid &gt;= 0) ? g_ctx-&gt;pid : old_fork();
+}
+</code></pre>
+<blockquote>
+<p>以下在源码中以 DCL_HOOK_FUNC 声明的代码都是展开后的代码。</p>
+</blockquote>
+<p>这个 hook 似乎让原先的 fork 变成有条件的调用，我们看注释：「如果可用，跳过实际的 fork 并返回缓存的结果；同时，如果有必要，卸载一阶段 zygisk」</p>
+<h3 id="预-fork">预 fork</h3>
+<p>我们来看看这个 <code>g_ctx</code></p>
+<pre><code class="language-cpp">// Current context
+HookContext *g_ctx;
+</code></pre>
+<p>可见这是一个 HookContext 类型的全局变量。HookContext 是一个结构体：</p>
+<pre><code class="language-cpp">struct HookContext {
+    JNIEnv *env;
+    union {
+        AppSpecializeArgsImpl *args;
+        ServerSpecializeArgsImpl *server_args;
+        void *raw_args;
+    };
+    const char *process;
+    int pid;
+    bitset&lt;FLAG_MAX&gt; flags;
+    AppInfo info;
+    vector&lt;ZygiskModule&gt; modules;
+
+    HookContext() : pid(-1), info{} {}
+
+    static void close_fds();
+    void unload_zygisk();
+
+    DCL_PRE_POST(fork)
+    void run_modules_pre(const vector&lt;int&gt; &amp;fds);
+    void run_modules_post();
+    DCL_PRE_POST(nativeForkAndSpecialize)
+    DCL_PRE_POST(nativeSpecializeAppProcess)
+    DCL_PRE_POST(nativeForkSystemServer)
+};
+
+#define DCL_PRE_POST(name) \
+void name##_pre();         \
+void name##_post();
+</code></pre>
+<p>其中 <code>DCL_PRE_POST</code> 就是声明 <code>xxx_pre</code> 和 <code>xxx_post</code> 的函数，如 fork 就是：</p>
+<pre><code class="language-cpp">void fork_pre();
+void fork_post();
+</code></pre>
+<p>那么我们自然要关心 fork 的 pre 和 post 发生了什么，首先看 pre ：</p>
+<pre><code class="language-cpp">// Do our own fork before loading any 3rd party code
+// First block SIGCHLD, unblock after original fork is done
+void HookContext::fork_pre() {
+    g_ctx = this;
+    sigmask(SIG_BLOCK, SIGCHLD);
+    pid = old_fork(); // this-&gt;pid, 即 g_ctx-&gt;pid
+}
+</code></pre>
+<p>可见，fork_pre 中修改了全局变量 g_ctx 为 this ，屏蔽 SIGCHLD 信号，并主动调用了原先的 fork 函数。注释中说，这是要在加载第三方代码（模块）前先进行 fork 。</p>
+<p>但是 fork_pre 并非是在 hook 的 fork 调用的，Zygisk API 也没有「forkPre」这样的 api 提供给模块。实际上，这是在 forkAndSpecialize 和 forkSystemServer 的 fork 之前主动调用的：</p>
+<pre><code class="language-cpp">void HookContext::nativeForkSystemServer_pre() {
+    fork_pre();
+    flags[SERVER_SPECIALIZE] = true;
+    if (pid == 0) {
+        ZLOGV(&quot;pre  forkSystemServer\n&quot;);
+        run_modules_pre(remote_get_info(1000, &quot;system_server&quot;, &amp;info));
+        close_fds();
+        android_logging();
+    }
+}
+
+void HookContext::nativeForkAndSpecialize_pre() {
+    fork_pre();
+    flags[FORK_AND_SPECIALIZE] = true;
+    if (pid == 0) {
+        nativeSpecializeAppProcess_pre();
+    }
+}
+</code></pre>
+<p>这里我们没有分析 nativeForkAndSpecialize_pre 何时调用，暂且认为它就是 nativeForkAndSpecialize 调用前执行的。</p>
+<p>可以发现，本来 fork 是要在这两个方法执行过程中进行的，但 zygisk 将 fork 提前了，这个操作可以叫「预 fork」。</p>
+<p>这就有点类似于 Android 10 开始引入的 Zygote 的另一种工作方式：<code>USAP</code> ，不同于每次创建进程是先 fork 再 specialize ，它是 zygote 启动后直接 fork 10 个进程 (<code>forkApp</code>)，系统服务请求创建进程的时候，随机选择一个进行 specialize (<code>SpecializeAppProcess</code>)。</p>
+<blockquote>
+<p><a href="https://juejin.cn/post/6922704248195153927">Android Framework | 一种新型的应用启动机制:USAP - 掘金</a><br><a href="http://gaozhipeng.me/posts/zygote-prefork/">Zygote pre-fork线程池源码分析|Gaozhipeng&#39;s Blog</a>  </p>
+</blockquote>
+<p>实际上，fork 之前的工作主要是做一些 fd 检查，防止不合法的 fd 泄露到 fork 后的进程，因此，先 fork 实际上是合理的。并且这样就达到了 Zygisk 的目的：在 Specialize pre 的时候加载模块，而不必 Zygote 进程中加载，因为这样 fork 之后，我们得到了一个处于 pre specialize 且与原 zygote 隔离开的进程，此时即可安全地根据 denylist 决定是否加载模块。</p>
+<p>既然已经「预 fork」了，那就原本过程上的「fork」就不需要了，因此 pre fork 的时候缓存「预 fork」的结果——原进程得到子进程的 pid ，子进程得到 0——到调用 fork 的时候，实际上不做 fork ，直接返回这个缓存的值即可。</p>
+<h3 id="卸载一阶段">卸载一阶段</h3>
+<p>被 hook 的 fork 还要负责卸载一阶段加载的 so ，这个卸载是无条件的。</p>
+<p>……</p>
+<h1 id="zygisk-denylist">Zygisk Denylist</h1>
