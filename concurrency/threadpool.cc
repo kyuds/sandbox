@@ -63,7 +63,6 @@ void ThreadPool::thread_func(std::mutex& taskMutex,
         taskMutex.unlock();
         
         lk.unlock();
-        cv_c.notify_all();
 
         (t->task)(t->args);
         free(t);
@@ -80,14 +79,9 @@ void ThreadPool::AddTask(task_t * t) {
 }
 
 void ThreadPool::BatchAddTask(std::vector<task_t*>& tasks) {
-    taskMutex.lock();
-    bool signal = false;
-    if (taskList.empty()) signal = true;
     for (auto t : tasks) {
-        taskList.push_back(t);
+        AddTask(t);
     }
-    if (signal) wakeThreads();
-    taskMutex.unlock();
 }
 
 void ThreadPool::wakeThreads() {
