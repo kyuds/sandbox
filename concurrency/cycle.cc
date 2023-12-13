@@ -5,6 +5,9 @@
 
 // g++ -std=c++20 -D_LIBCPP_DISABLE_AVAILABILITY cycle.cc -o a
 
+// learning objectives:
+// - maintain threads to avoid thread creation overhead
+// - used in my other project, Praph
 
 void cycle(std::condition_variable& cv_c, std::mutex& cv_m, std::counting_semaphore<1>& c, bool * status) {
     std::unique_lock<std::mutex> lk(cv_m); 
