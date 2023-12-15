@@ -18,6 +18,27 @@ BPlusTree::BPlusTree(int _order) {
     root = (Node *) new LeafNode(order);
 }
 
+BPlusTree::BPlusTree(int _order, int fill, std::vector<pair_t>& data) {
+    assert(_order > 0);
+    assert(fill <= _order * 2);
+    order = _order;
+    root = (Node *) new LeafNode(order);
+
+    int idx = 0;
+    while (idx < data.size()) {
+        auto ret = root->bulk(data, idx, fill);
+        if (ret.has_value()) {
+            std::vector<long> k;
+            std::vector<Node*> n;
+            k.push_back(ret.value().second);
+            n.push_back(root);
+            n.push_back(ret.value().first);
+
+            root = (Node *) new InnerNode(order, k, n);
+        }
+    }
+}
+
 BPlusTree::~BPlusTree() { delete root;}
 int BPlusTree::getHeight() { return root->getHeight(); }
 void BPlusTree::print() { root->print(0); }
@@ -98,6 +119,22 @@ std::optional<std::pair<Node*, long>> LeafNode::put(long key, long val) {
 
         return std::make_pair(newLeaf, sepKey);
     }
+}
+
+std::optional<std::pair<Node*, long>> LeafNode::bulk(std::vector<pair_t>& data,
+                                                     int& idx,
+                                                     int fill) {
+    assert(kvStore.size() == 0);
+    int i = 0;
+    while (idx < data.size() && i++ < fill) {
+        kvStore.push_back(data.at(idx++));
+    }
+    if (idx < data.size()) {
+        long sepKey = data.at(idx).key;
+        nextLeaf = new LeafNode(getOrder());
+        return std::make_pair(nextLeaf, sepKey);
+    }
+    return std::nullopt;
 }
 
 bool LeafNode::remove(long key) {
@@ -192,6 +229,33 @@ std::optional<std::pair<Node*, long>> InnerNode::put(long key, long val) {
     return std::nullopt;
 }
 
+std::optional<std::pair<Node*, long>> InnerNode::bulk(std::vector<pair_t>& data,
+                                                      int& idx,
+                                                      int fill) {
+    while (idx < data.size() && keys.size() <= getOrder() * 2) {
+        auto ret = nodes.at(nodes.size() - 1)->bulk(data, idx, fill);
+        if (ret.has_value()) {
+            keys.push_back(ret.value().second);
+            nodes.push_back(ret.value().first);
+        }
+    }
+    if (keys.size() <= getOrder() * 2) {
+        return std::nullopt;
+    }
+    std::vector<long> skeys;
+    long promote = *(keys.begin() + getOrder());
+    skeys.insert(skeys.end(), std::make_move_iterator(keys.begin() + getOrder() + 1),
+                              std::make_move_iterator(keys.end()));
+    keys.erase(keys.begin() + getOrder(), keys.end());
+    std::vector<Node*> snodes;
+    snodes.insert(snodes.end(), std::make_move_iterator(nodes.begin() + getOrder() + 1),
+                                std::make_move_iterator(nodes.end()));
+    nodes.erase(nodes.begin() + getOrder() + 1, nodes.end());
+    Node * newInner = new InnerNode(getOrder(), std::move(skeys), std::move(snodes));
+
+    return std::make_pair(newInner, promote);
+}
+
 bool InnerNode::remove(long key) {
     Node * n = findRelevantNode(key);
     return n->remove(key);
@@ -266,10 +330,41 @@ void testLeafNode();
 void testInnerNode();
 void testBPlusTree();
 void testIterator();
+void testLeafBulk();
+void testBulk();
 
 int main(void) {
-    testIterator();
+    testBulk();
     return 0;
+}
+
+void testBulk() {
+    std::vector<pair_t> data;
+    for (int i = 0; i < 30; i++) {
+        data.push_back(pair_t{(long) i, (long) i});
+    }
+    BPlusTree * bt = new BPlusTree(2, 3, data);
+    bt->put(6L, 3L);
+    bt->print();
+    int x = 0;
+    for (auto i = bt->begin(); i != bt->end(); i++) {
+        assert(i->key == x++);
+        std::cout << i->key << " ";
+    }
+}
+
+void testLeafBulk() {
+    std::vector<pair_t> data;
+    for (int i = 0; i < 4; i++) {
+        data.push_back(pair_t{(long) i, (long) i});
+    }
+    LeafNode * nd = new LeafNode(2);
+    int idx = 0;
+    auto ret = nd->bulk(data, idx, 3);
+    assert(ret.has_value());
+    assert(nd->getKey(0L).has_value());
+    assert(!nd->getKey(3L).has_value());
+    assert(idx == 3);
 }
 
 void testIterator() {
@@ -279,7 +374,6 @@ void testIterator() {
     }
     long x = 0L;
     for (auto i = bt->begin(); i != bt->end(); i++) {
-        // todo: why is this not substitutable with i->key?
         assert(i->key == x);
         x++;
         std::cout << i->key << " ";

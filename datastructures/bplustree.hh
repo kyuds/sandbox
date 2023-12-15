@@ -17,6 +17,7 @@ typedef struct {
 class BPlusTree {
     public:
         BPlusTree(int _order);
+        // bulk load
         BPlusTree(int _order, int fill, std::vector<pair_t>& data);
         ~BPlusTree();
 
@@ -74,9 +75,9 @@ class Node {
         virtual LeafNode * getLeftMost() = 0;
 
         virtual std::optional<std::pair<Node*, long>> put(long key, long val) = 0;
-        // virtual std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>::iterator * cur,
-        //                                                    std::vector<pair_t>::iterator * end,
-        //                                                    int fill) = 0;
+        virtual std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>& data,
+                                                           int& idx,
+                                                           int fill) = 0;
         virtual bool remove(long key) = 0;
 
         virtual void print(int offset) = 0;
@@ -98,9 +99,9 @@ class InnerNode : public Node {
         int getHeight() override { return height; }
 
         std::optional<std::pair<Node*, long>> put(long key, long val) override;
-        // std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>::iterator * cur,
-        //                                            std::vector<pair_t>::iterator * end,
-        //                                            int fill) override;
+        std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>& data,
+                                                   int& idx,
+                                                   int fill) override;
         bool remove(long key) override;
 
         void print(int offset) override;
@@ -124,9 +125,9 @@ class LeafNode : public Node {
         int getHeight() override { return 1; }
 
         std::optional<std::pair<Node*, long>> put(long key, long val) override;
-        // std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>::iterator * cur,
-        //                                            std::vector<pair_t>::iterator * end,
-        //                                            int fill) override;
+        std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>& data,
+                                                   int& idx,
+                                                   int fill) override;
         bool remove(long key) override;
 
         void print(int offset) override;
