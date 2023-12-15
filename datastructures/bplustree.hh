@@ -1,6 +1,7 @@
 #ifndef BPLUSTREE
 #define BPLUSTREE
 
+#include <iterator>
 #include <optional>
 #include <vector>
 
@@ -12,6 +13,53 @@ typedef struct {
     long key;
     long val;
 } pair_t;
+
+class BPlusTree {
+    public:
+        BPlusTree(int _order);
+        BPlusTree(int _order, int fill, std::vector<pair_t>& data);
+        ~BPlusTree();
+
+        void put(long key, long val);
+        void remove(long key);
+
+        std::optional<long> get(long key);
+        long getOrDefault(long key, long def);
+
+        int getOrder() { return order; }
+        int getHeight();
+
+        void print();
+
+    private:
+        int order;
+        Node * root;
+    
+    // iterator implementation
+    public:
+        class iterator : public std::iterator<
+                                    std::input_iterator_tag,
+                                    pair_t,
+                                    int,
+                                    const pair_t *,
+                                    pair_t&
+                                > {
+            public:
+                explicit iterator(bool _end, Node * root);
+                iterator& operator++();
+                const iterator operator++(int);
+                bool operator==(iterator other) const;
+                bool operator!=(iterator other) const;
+                reference operator*() const;
+                pair_t * operator->();
+            private:
+                LeafNode * curr;
+                int num;
+                bool end;
+        };
+        iterator begin() { return iterator(false, root); }
+        iterator end() { return iterator(true, root); }
+};
 
 class Node {
     public:
@@ -26,6 +74,9 @@ class Node {
         virtual LeafNode * getLeftMost() = 0;
 
         virtual std::optional<std::pair<Node*, long>> put(long key, long val) = 0;
+        // virtual std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>::iterator * cur,
+        //                                                    std::vector<pair_t>::iterator * end,
+        //                                                    int fill) = 0;
         virtual bool remove(long key) = 0;
 
         virtual void print(int offset) = 0;
@@ -47,6 +98,9 @@ class InnerNode : public Node {
         int getHeight() override { return height; }
 
         std::optional<std::pair<Node*, long>> put(long key, long val) override;
+        // std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>::iterator * cur,
+        //                                            std::vector<pair_t>::iterator * end,
+        //                                            int fill) override;
         bool remove(long key) override;
 
         void print(int offset) override;
@@ -70,6 +124,9 @@ class LeafNode : public Node {
         int getHeight() override { return 1; }
 
         std::optional<std::pair<Node*, long>> put(long key, long val) override;
+        // std::optional<std::pair<Node*, long>> bulk(std::vector<pair_t>::iterator * cur,
+        //                                            std::vector<pair_t>::iterator * end,
+        //                                            int fill) override;
         bool remove(long key) override;
 
         void print(int offset) override;
@@ -79,34 +136,14 @@ class LeafNode : public Node {
         void setNextLeaf(LeafNode * ln) { nextLeaf = ln; }
 
         std::vector<pair_t>& getKeys() { return kvStore; }
+
+        // for iterator
+        int size() { return kvStore.size(); }
+        pair_t & getByIdx(int i) { return kvStore.at(i); }
     
     private:
         LeafNode * nextLeaf;
         std::vector<pair_t> kvStore;
-};
-
-class BPlusTree {
-    public:
-        BPlusTree(int _order);
-        // BPlusTree(int _order, std::vector<long>& keys, std::vector<long>& vals);
-        ~BPlusTree() { delete root; }
-
-        void put(long key, long val);
-        void remove(long key);
-
-        std::optional<long> get(long key);
-        long getOrDefault(long key, long def);
-
-        int getOrder() { return order; }
-        int getHeight() { return root->getHeight(); }
-
-        void print() { root->print(0); }
-
-        // iterator stuff
-    
-    private:
-        int order;
-        Node * root;
 };
 
 #endif

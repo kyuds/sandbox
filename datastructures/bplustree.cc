@@ -8,11 +8,19 @@
 
 // g++ -std=c++20 bplustree.cc -o bplustree
 
+// learning objectives:
+// - write a bit more complicated datastructure in C++!
+// - learn about custom C++ iterators!
+
 BPlusTree::BPlusTree(int _order) {
     assert(_order > 0);
     order = _order;
     root = (Node *) new LeafNode(order);
 }
+
+BPlusTree::~BPlusTree() { delete root;}
+int BPlusTree::getHeight() { return root->getHeight(); }
+void BPlusTree::print() { root->print(0); }
 
 void BPlusTree::put(long key, long val) {
     auto r = root->put(key, val);
@@ -210,14 +218,74 @@ void InnerNode::print(int offset) {
     }
 }
 
+BPlusTree::iterator::iterator(bool _end, Node * root) {
+    end = _end;
+    curr = root->getLeftMost();
+    num = 0;
+}
+
+BPlusTree::iterator& BPlusTree::iterator::operator++() {
+    if (end) {
+        return *this;
+    }
+    num++;
+    if (num >= curr->size()) {
+        num = 0;
+        curr = curr->getNextLeaf();
+        if (curr == NULL) end = true;
+    }
+    return *this;
+}
+
+const BPlusTree::iterator BPlusTree::iterator::operator++(int) {
+    iterator ret = *this;
+    ++(*this);
+    return ret;
+}
+
+bool BPlusTree::iterator::operator==(iterator other) const {
+    if (end || other.end) return end && other.end;
+    return curr == other.curr && num == other.num;
+}
+
+bool BPlusTree::iterator::operator!=(iterator other) const {
+    if (end || other.end) return end != other.end;
+    return curr != other.curr || num != other.num;
+}
+
+pair_t& BPlusTree::iterator::operator*() const {
+    return curr->getByIdx(num);
+}
+
+pair_t * BPlusTree::iterator::operator->() {
+    return &curr->getByIdx(num);
+}
+
 // testing code
 void testLeafNode();
 void testInnerNode();
 void testBPlusTree();
+void testIterator();
 
 int main(void) {
-    testBPlusTree();
+    testIterator();
     return 0;
+}
+
+void testIterator() {
+    auto bt = new BPlusTree(2);
+    for (int i = 0; i < 30; i++) {
+        bt->put((long) i, (long) i);
+    }
+    long x = 0L;
+    for (auto i = bt->begin(); i != bt->end(); i++) {
+        // todo: why is this not substitutable with i->key?
+        assert(i->key == x);
+        x++;
+        std::cout << i->key << " ";
+    }
+    std::cout << std::endl << std::endl;
+    bt->print();
 }
 
 void testBPlusTree() {
