@@ -7,7 +7,7 @@ Concurrency:
 
 Datastructures:
 - [X] Bloom Filters (Regular & Counting)
-- [ ] B+ Tree
+- [X] B+ Tree
 
 Reverse Engineering:
 - [X] A lot of Frida snippets
