@@ -4,6 +4,7 @@ Repository for testing, experiments, proof of concepts, and studies into areas s
 Concurrency:
 - [X] Thread Pooling
 - [X] Cyclic Thread Usage
+- [ ] Semaphore Multithread Cycling
 
 Datastructures:
 - [X] Bloom Filters (Regular & Counting)
