@@ -35,7 +35,7 @@ class Executor {
         Executor(int _numWorkers);
         ~Executor();
 
-        void cycle();
+        void cycle(int iter);
         static void tf(bool& joinNow, Worker * worker);
 
     private:
