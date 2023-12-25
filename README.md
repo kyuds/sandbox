@@ -5,6 +5,7 @@ Concurrency:
 - [X] Thread Pooling
 - [X] Cyclic Thread Usage
 - [X] Semaphore Multithread Cycling
+- [X] Thread-Safe Random Generator
 
 Datastructures:
 - [X] Bloom Filters (Regular & Counting)
@@ -13,3 +14,6 @@ Datastructures:
 Reverse Engineering:
 - [X] A lot of Frida snippets
 - [X] IDA Batch Profiling 
+
+ETC:
+- [X] using references with cpp vectors
