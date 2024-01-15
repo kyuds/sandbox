@@ -1,5 +1,5 @@
 # sandbox
-Repository for testing, experiments, proof of concepts, and studies into areas such as systems, concurrency, reverse engineering, machine learning, algorithms, datastructures, etc. 
+Repository for small programs and learning activities. 
 
 Concurrency:
 - [X] Thread Pooling
@@ -21,3 +21,8 @@ gRPC:
 Rust:
 - [ ] Learning Rust Basics
 - [ ] Simple Rust Datastructures
+
+ShellScripts:
+- [X] APK Tooling
+- [X] Code Line Counter
+- [X] Proxy Tool
