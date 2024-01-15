@@ -15,5 +15,9 @@ Reverse Engineering:
 - [X] A lot of Frida snippets
 - [X] IDA Batch Profiling 
 
-ETC:
-- [X] using references with cpp vectors
+gRPC:
+- [ ] Basic gRPC practice/build in Rust
+
+Rust:
+- [ ] Learning Rust Basics
+- [ ] Simple Rust Datastructures
