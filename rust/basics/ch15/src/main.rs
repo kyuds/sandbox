@@ -1,5 +1,6 @@
 use std::ops::Deref;
 use std::rc::Rc;
+use std::cell::RefCell;
 
 enum List {
     Cons(i32, Box<List>),
@@ -26,6 +27,20 @@ impl<T> Deref for MyBox<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+enum List2 {
+    Cons(i32, RefCell<Rc<List>>),
+    Nil,
+}
+
+impl List2 {
+    fn tail(&self) -> Option<&RefCell<Rc<List>>> {
+        match self {
+            Self::Cons(_, item) => Some(item),
+            Self::Nil => None,
+        }
     }
 }
 
