@@ -19,10 +19,15 @@ gRPC:
 - [ ] Basic gRPC practice/build in Rust
 
 Rust:
-- [ ] Learning Rust Basics
+- [X] Learning Rust Basics
+- [X] Rust Webserver
 - [ ] Simple Rust Datastructures
 
 ShellScripts:
 - [X] APK Tooling
 - [X] Code Line Counter
 - [X] Proxy Tool
+
+Networking:
+- [X] Scapy DNS Spoofer
+
